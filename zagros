@@ -2842,6 +2842,39 @@ cmd_reload_core() {
     esac
 }
 
+cmd_core_settings() {  # l2tp sec.2: `cores settings <core>` — masked view
+    require_root; require_installed
+    local core="$1"; shift || true
+    [[ -n "$core" ]] || die "usage: zagros cores settings <core>"
+    hostctl cores-settings-get "$core" | jq -r '
+        "core \(.core)",
+        (.settings | to_entries[] |
+            "  \(.key) = \(.value | tostring)")'
+}
+
+cmd_core_set() {  # l2tp sec.2: `cores set <core> KEY VALUE [--json]`
+    require_root; require_installed
+    local core="$1" key="$2" value="$3"; shift 3 || true
+    [[ -n "$core" && -n "$key" && $# -ge 0 ]] || die "usage: zagros cores set <core> KEY VALUE [--json]"
+    local jsonflag=""
+    while (($#)); do case "$1" in
+        --json) jsonflag="--json"; shift ;;
+        *) die "unknown option: $1" ;;
+    esac; done
+    log_step "Setting $key on core '$core'"
+    local out rc
+    set +e
+    out="$(hostctl cores-settings-set "$core" "$key" "$value" $jsonflag 2>&1)"; rc=$?
+    set -e
+    if ((rc)); then printf '%s\n' "$out" | jq -r '.error // .' 2>/dev/null || printf '%s\n' "$out"
+        die "cores set failed"
+    fi
+    printf '%s\n' "$out" | jq -r '"  \(.key // "")\(if .restarted then " applied — core restarted" else " applied (saved; start the core to take effect)" end)"' \
+        | head -1
+    printf '%s\n' "$out" | jq -r '.applied | to_entries[] | "  \(.key) = \(.value | tostring)"'
+    log_ok "done"
+}
+
 cmd_sync() {
     require_root; require_installed
     # f-softsync-1: help advertises `sync [--core X]`, so `--core X` and
@@ -2980,6 +3013,8 @@ cmd_cores() {
         reload|restart)         cmd_reload_core "$@" ;;
         start)                  cmd_core_power start "$@" ;;
         stop)                   cmd_core_power stop "$@" ;;
+        settings)               cmd_core_settings "$@" ;;
+        set)                    cmd_core_set "$@" ;;
         -h|--help|help)
             cat <<EOF
 ${C_BLD}zagros cores${C_RST} <action> [core] [options]
@@ -2991,6 +3026,8 @@ ${C_BLD}zagros cores${C_RST} <action> [core] [options]
   ${C_BLU}reload${C_RST} ${C_DIM}<core>${C_RST}             ${C_PNK}restart a single core (panel-aware)${C_RST}
   ${C_BLU}start${C_RST} ${C_DIM}<core>${C_RST}              ${C_PNK}start one core (panel-aware)${C_RST}
   ${C_BLU}stop${C_RST} ${C_DIM}<core>${C_RST}               ${C_PNK}stop one core (panel-aware)${C_RST}
+  ${C_BLU}settings${C_RST} ${C_DIM}<core>${C_RST}           ${C_PNK}show a core's settings (secrets masked)${C_RST}
+  ${C_BLU}set${C_RST} ${C_DIM}<core> KEY VALUE${C_RST}      ${C_PNK}edit one setting (--json for numbers/booleans)${C_RST}
 EOF
             ;;
         *) log_err "unknown cores action: $sub"; echo; cmd_cores help; exit 2 ;;
